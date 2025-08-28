@@ -140,25 +140,30 @@ export default function SignDetector() {
     setIsPredicting(true);
     setPrediction(null);
 
-    await tf.tidy(async () => {
-      const img = tf.browser.fromPixels(webcamRef.current!);
-      const activation = mobilenetModel.current!.infer(img, true);
-      const result = await classifier.current!.predictClass(activation, 5);
-      
-      const confidence = result.confidences[result.label];
-      const label = SIGNS[parseInt(result.label, 10)];
-
-      if (confidence > CONFIDENCE_THRESHOLD) {
-        setPrediction({ label, confidence });
-        const newHistory = [...wordHistory, label].slice(-MAX_WORD_HISTORY);
-        setWordHistory(newHistory);
-        checkForSentenceMatch(newHistory);
-      } else {
-        setPrediction({ label: "Unrecognized", confidence: 1 - confidence });
-      }
+    const activation = tf.tidy(() => {
+        const img = tf.browser.fromPixels(webcamRef.current!);
+        return mobilenetModel.current!.infer(img, true);
     });
 
-    setIsPredicting(false);
+    try {
+        const result = await classifier.current!.predictClass(activation, 5);
+        const confidence = result.confidences[result.label];
+        const label = SIGNS[parseInt(result.label, 10)];
+
+        if (confidence > CONFIDENCE_THRESHOLD) {
+            setPrediction({ label, confidence });
+            const newHistory = [...wordHistory, label].slice(-MAX_WORD_HISTORY);
+            setWordHistory(newHistory);
+            checkForSentenceMatch(newHistory);
+        } else {
+            setPrediction({ label: "Unrecognized", confidence: 1 - confidence });
+        }
+    } catch(e) {
+        console.error("Prediction failed", e);
+    } finally {
+        activation.dispose();
+        setIsPredicting(false);
+    }
   };
   
   return (
