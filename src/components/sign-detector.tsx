@@ -9,10 +9,25 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription }
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Camera, Sparkles, PlusCircle, Hand } from 'lucide-react';
+import { Loader2, Camera, Sparkles, PlusCircle, Hand, MessagesSquare } from 'lucide-react';
 
-const SIGNS = ["Hello", "Yes", "No", "Thank You", "Please"];
+const SIGNS = ["Hello", "Yes", "No", "Thank You", "Please", "What", "is", "your", "name", "How", "are", "you", "I", "need", "water", "Good", "morning", "Where", "the", "toilet", "am", "fine", "help", "me", "Nice", "to", "meet", "love"];
 const CONFIDENCE_THRESHOLD = 0.8;
+const MAX_WORD_HISTORY = 5;
+
+const targetSentences = [
+    "what is your name",
+    "how are you",
+    "i need water",
+    "good morning",
+    "where is the toilet",
+    "i am fine",
+    "thank you",
+    "please help me",
+    "nice to meet you",
+    "i love you"
+].map(s => s.toLowerCase());
+
 
 export default function SignDetector() {
   const { toast } = useToast();
@@ -33,6 +48,9 @@ export default function SignDetector() {
 
   const [prediction, setPrediction] = useState<{ label: string, confidence: number } | null>(null);
   const [infoMessage, setInfoMessage] = useState("Loading the AI model, please wait...");
+
+  const [wordHistory, setWordHistory] = useState<string[]>([]);
+  const [detectedSentence, setDetectedSentence] = useState<string | null>(null);
 
   // Load models on component mount
   useEffect(() => {
@@ -96,6 +114,18 @@ export default function SignDetector() {
     });
   };
 
+  const checkForSentenceMatch = (history: string[]) => {
+      const recentWords = history.join(' ').toLowerCase();
+      const match = targetSentences.find(sentence => recentWords.includes(sentence));
+      if (match) {
+          setDetectedSentence(match.charAt(0).toUpperCase() + match.slice(1));
+          // Optional: Clear history after a match
+          // setWordHistory([]);
+      } else {
+          setDetectedSentence(null);
+      }
+  };
+
   // Function to predict the gesture
   const predictGesture = async () => {
     if (!mobilenetModel.current || !classifier.current || !webcamRef.current || classifier.current.getNumClasses() === 0) {
@@ -120,6 +150,9 @@ export default function SignDetector() {
 
       if (confidence > CONFIDENCE_THRESHOLD) {
         setPrediction({ label, confidence });
+        const newHistory = [...wordHistory, label].slice(-MAX_WORD_HISTORY);
+        setWordHistory(newHistory);
+        checkForSentenceMatch(newHistory);
       } else {
         setPrediction({ label: "Unrecognized", confidence: 1 - confidence });
       }
@@ -173,7 +206,7 @@ export default function SignDetector() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Hand className="text-primary" />
-              <span>Detection</span>
+              <span>Word Detection</span>
             </CardTitle>
             <CardDescription>
               After training, click detect to see the result.
@@ -195,7 +228,7 @@ export default function SignDetector() {
               </div>
             ) : (
               <div className="text-center text-muted-foreground h-24 flex items-center justify-center">
-                <p>Prediction will be shown here.</p>
+                <p>Word prediction will be shown here.</p>
               </div>
             )}
           </CardContent>
@@ -205,6 +238,30 @@ export default function SignDetector() {
               {isPredicting ? 'Detecting...' : 'Detect Gesture'}
             </Button>
           </CardFooter>
+        </Card>
+
+        {/* Sentence Detection Card */}
+        <Card className="shadow-lg">
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                    <MessagesSquare className="text-primary" />
+                    <span>Sentence Detection</span>
+                </CardTitle>
+                <CardDescription>
+                    Recently detected words: {wordHistory.join(', ') || 'None'}
+                </CardDescription>
+            </CardHeader>
+            <CardContent>
+                {detectedSentence ? (
+                    <p className="text-2xl font-bold text-center text-accent">
+                        {detectedSentence}
+                    </p>
+                ) : (
+                    <div className="text-center text-muted-foreground h-12 flex items-center justify-center">
+                        <p>Matching sentence will appear here.</p>
+                    </div>
+                )}
+            </CardContent>
         </Card>
 
         {/* Training Card */}
@@ -219,27 +276,29 @@ export default function SignDetector() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {SIGNS.map((sign, index) => (
-              <React.Fragment key={sign}>
-                <div className="flex items-center justify-between gap-4">
-                  <span className="font-medium">{sign}</span>
-                  <div className="flex items-center gap-4">
-                    <span className="text-sm text-muted-foreground tabular-nums">
-                      {sampleCounts[sign]} samples
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addSample(index)}
-                      disabled={!webcamEnabled || isModelLoading}
-                    >
-                      <PlusCircle className="mr-2 h-4 w-4" /> Add
-                    </Button>
+            <div className="max-h-64 overflow-y-auto pr-2">
+              {SIGNS.map((sign, index) => (
+                <React.Fragment key={sign}>
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="font-medium">{sign}</span>
+                    <div className="flex items-center gap-4">
+                      <span className="text-sm text-muted-foreground tabular-nums">
+                        {sampleCounts[sign]} samples
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => addSample(index)}
+                        disabled={!webcamEnabled || isModelLoading}
+                      >
+                        <PlusCircle className="mr-2 h-4 w-4" /> Add
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                {index < SIGNS.length - 1 && <Separator />}
-              </React.Fragment>
-            ))}
+                  {index < SIGNS.length - 1 && <Separator className="my-3"/>}
+                </React.Fragment>
+              ))}
+            </div>
           </CardContent>
         </Card>
       </div>
