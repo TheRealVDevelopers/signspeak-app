@@ -69,13 +69,31 @@ export default function Home() {
           <h2 className="text-2xl font-bold text-primary mb-4">
             How It Works
           </h2>
-          <p className="text-muted-foreground max-w-2xl mx-auto">
-            SignSpeak empowers you to build a personalized sign language
-            recognizer. Whether you're using standard Indian Sign Language
-            (ISL) or creating your own signs, our platform learns from you.
-            Simply add gesture samples, label them, and let the AI translate
-            your movements into text.
-          </p>
+          <div className="text-left max-w-3xl mx-auto space-y-6">
+              <p className="text-muted-foreground">
+                SignSpeak empowers you to build a personalized sign language
+                recognizer. Whether you're using standard Indian Sign Language
+                (ISL) or creating your own signs, our platform learns from you.
+                Follow these simple steps to get started:
+              </p>
+              <ol className="list-decimal list-inside space-y-4 text-muted-foreground">
+                <li>
+                  <span className="font-semibold text-foreground">Train Your Signs:</span> Navigate to the <Link href="/train" className="text-primary underline">Train</Link> page. 
+                  Create a label for your gesture (e.g., "Hello" or "I need water"). 
+                  Then, hold the sign in front of your webcam and click "Sample" multiple times to provide examples. The more samples you provide, the more accurate the detection will be.
+                </li>
+                <li>
+                  <span className="font-semibold text-foreground">Save Your Progress:</span> Once you've added all your desired signs and their samples, click the "Save Model to Browser" button. This will store your custom AI model securely in your browser's local storage, so it remembers your signs for next time.
+                </li>
+                <li>
+                  <span className="font-semibold text-foreground">Detect & Communicate:</span> Go to the <Link href="/detect" className="text-primary underline">Detect</Link> page. 
+                  Your webcam will activate, and you can start making the signs you've trained. The application will display the detected word or sentence in real-time. You can even string signs together to form complete sentences.
+                </li>
+              </ol>
+               <p className="text-muted-foreground pt-4">
+                That's it! You have a dynamic sign language recognizer tailored to your unique way of communicating.
+              </p>
+          </div>
         </div>
       </div>
     </main>
