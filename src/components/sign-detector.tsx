@@ -2,15 +2,17 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import * as tf from '@tensorflow/tfjs';
-import * as mobilenet from '@tensorflow-models/mobilenet';
-import * as knnClassifier from '@tensorflow-models/knn-classifier';
+import type * as tf from '@tensorflow/tfjs';
+import type * as mobilenet from '@tensorflow-models/mobilenet';
+import type * as knnClassifier from '@tensorflow-models/knn-classifier';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Camera, Sparkles, Hand, MessagesSquare } from 'lucide-react';
+import { Loader2, Camera, Sparkles, Hand } from 'lucide-react';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+
 
 const CONFIDENCE_THRESHOLD = 0.8;
 const MAX_WORD_HISTORY = 5;
@@ -33,26 +35,48 @@ const defaultTargetSentences = [
 export default function SignDetector() {
   const { toast } = useToast();
 
+  // TensorFlow and model refs
+  const tfRef = useRef<typeof tf | null>(null);
+  const mobilenetRef = useRef<typeof mobilenet | null>(null);
+  const knnClassifierRef = useRef<typeof knnClassifier | null>(null);
+
   const classifier = useRef<knnClassifier.KNNClassifier | null>(null);
   const mobilenetModel = useRef<mobilenet.MobileNet | null>(null);
   const webcamRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  const [isModelLoading, setIsModelLoading] = useState(true);
-  const [webcamEnabled, setWebcamEnabled] = useState(false);
+  
+  const [isModelLoading, setIsModelLoading] = useState(false);
+  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
   
   const [prediction, setPrediction] = useState<{ label: string, confidence: number } | null>(null);
-  const [infoMessage, setInfoMessage] = useState("Loading models and custom data...");
+  const [infoMessage, setInfoMessage] = useState("Enable your webcam to begin.");
 
   const [wordHistory, setWordHistory] = useState<string[]>([]);
   const [detectedSentence, setDetectedSentence] = useState<string | null>(null);
 
   const [classLabels, setClassLabels] = useState<string[]>([]);
   const [targetSentences, setTargetSentences] = useState<string[]>(defaultTargetSentences);
+  
+  const [areModelsLoaded, setAreModelsLoaded] = useState(false);
 
-  const loadModelAndClassifier = useCallback(async () => {
+
+  const loadModels = useCallback(async () => {
+    if (areModelsLoaded) return;
+    setIsModelLoading(true);
+    setInfoMessage("Loading AI models and custom data...");
+    
     try {
+      // Dynamically import the libraries
+      const [tf, mobilenet, knnClassifier] = await Promise.all([
+        import('@tensorflow/tfjs'),
+        import('@tensorflow-models/mobilenet'),
+        import('@tensorflow-models/knn-classifier')
+      ]);
+
+      tfRef.current = tf;
+      mobilenetRef.current = mobilenet;
+      knnClassifierRef.current = knnClassifier;
+
       await tf.setBackend('webgl');
       const mobilenetPromise = mobilenet.load();
       classifier.current = knnClassifier.create();
@@ -60,7 +84,7 @@ export default function SignDetector() {
       const storedClassifier = localStorage.getItem('signLanguageClassifier');
       if (storedClassifier) {
         const tensors = JSON.parse(storedClassifier, (key, value) => {
-          if (value.tensor) {
+          if (value && value.tensor) {
             return tf.tensor(value.data, value.shape, value.dtype as any);
           }
           return value;
@@ -81,8 +105,8 @@ export default function SignDetector() {
       }
 
       mobilenetModel.current = await mobilenetPromise;
-      setIsModelLoading(false);
-      setInfoMessage("Model loaded! Enable your webcam to begin.");
+      setAreModelsLoaded(true);
+      setInfoMessage("Models loaded! Click 'Detect Gesture' to start.");
     } catch (error) {
       console.error("Model loading failed:", error);
       setInfoMessage("Error: Could not load models. Please refresh the page.");
@@ -91,25 +115,24 @@ export default function SignDetector() {
         description: "There was an issue loading the machine learning models.",
         variant: "destructive"
       });
+    } finally {
+      setIsModelLoading(false);
     }
-  }, [toast]);
+  }, [toast, areModelsLoaded]);
 
-  useEffect(() => {
-    loadModelAndClassifier();
-  }, [loadModelAndClassifier]);
-
-  const enableWebcam = async () => {
+  const enableWebcam = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       if (webcamRef.current) {
         webcamRef.current.srcObject = stream;
         webcamRef.current.addEventListener('loadeddata', () => {
-          setWebcamEnabled(true);
-          setInfoMessage("Webcam active. Click 'Detect Gesture' to start.");
+          setHasCameraPermission(true);
+          loadModels();
         });
       }
     } catch (error) {
       console.error("Webcam access denied:", error);
+      setHasCameraPermission(false);
       setInfoMessage("Webcam access is required. Please allow access and try again.");
       toast({
         title: "Webcam Access Denied",
@@ -117,7 +140,8 @@ export default function SignDetector() {
         variant: "destructive"
       });
     }
-  };
+  }, [loadModels, toast]);
+  
 
   const checkForSentenceMatch = (history: string[]) => {
       const recentWords = history.join(' ').toLowerCase();
@@ -130,21 +154,31 @@ export default function SignDetector() {
   };
 
   const predictGesture = async () => {
-    if (!mobilenetModel.current || !classifier.current || !webcamRef.current || classifier.current.getNumClasses() === 0) {
-      toast({
-        title: "Cannot Predict",
-        description: "Please train at least one custom sign on the 'Train' page before detecting.",
-        variant: "destructive"
-      });
-      setIsPredicting(false);
-      return;
+    if (!mobilenetModel.current || !classifier.current || !webcamRef.current || !tfRef.current) {
+        toast({
+          title: "Models not ready",
+          description: "The AI models are still loading. Please wait a moment.",
+          variant: "destructive"
+        });
+        return;
     }
+
+    if(classifier.current.getNumClasses() === 0){
+        toast({
+            title: "Cannot Predict",
+            description: "Please train at least one custom sign on the 'Train' page before detecting.",
+            variant: "destructive"
+        });
+        setIsPredicting(false);
+        return;
+    }
+
 
     setIsPredicting(true);
     setPrediction(null);
 
-    const activation = tf.tidy(() => {
-        const img = tf.browser.fromPixels(webcamRef.current!);
+    const activation = tfRef.current.tidy(() => {
+        const img = tfRef.current!.browser.fromPixels(webcamRef.current!);
         return mobilenetModel.current!.infer(img, true);
     });
 
@@ -152,7 +186,6 @@ export default function SignDetector() {
         const result = await classifier.current!.predictClass(activation, 5);
         const confidence = result.confidences[result.label];
         
-        // Ensure classLabels has been loaded
         if (classLabels.length > 0) {
           const label = classLabels[parseInt(result.label, 10)];
           if (confidence > CONFIDENCE_THRESHOLD) {
@@ -188,26 +221,39 @@ export default function SignDetector() {
         </CardHeader>
         <CardContent>
           <div className="aspect-video bg-secondary rounded-md overflow-hidden relative flex items-center justify-center">
-            <video
+             <video
               ref={webcamRef}
               autoPlay
               playsInline
               muted
-              className={`w-full h-full object-cover transform -scale-x-100 ${webcamEnabled ? 'block' : 'hidden'}`}
+              className={`w-full h-full object-cover transform -scale-x-100 ${hasCameraPermission === true ? 'block' : 'hidden'}`}
             />
-            {!webcamEnabled && (
-              <div className="text-center text-muted-foreground">
-                <p>Webcam feed will appear here.</p>
-                {isModelLoading && <Loader2 className="h-8 w-8 animate-spin mx-auto mt-4" />}
+            {hasCameraPermission === null && !isModelLoading && (
+              <div className="text-center text-muted-foreground p-4">
+                 <p>Enable your webcam to start gesture detection.</p>
+              </div>
+            )}
+            {hasCameraPermission === false && (
+                <Alert variant="destructive" className="m-4">
+                  <AlertTitle>Camera Access Required</AlertTitle>
+                  <AlertDescription>
+                    Please allow camera access to use this feature. You may need to change permissions in your browser settings.
+                  </AlertDescription>
+                </Alert>
+            )}
+             {isModelLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80">
+                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+                <p className="mt-4 text-foreground">Loading AI models...</p>
               </div>
             )}
           </div>
         </CardContent>
         <CardFooter>
-          {!webcamEnabled && (
-            <Button onClick={enableWebcam} disabled={isModelLoading} className="w-full">
-              {isModelLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Camera className="mr-2 h-4 w-4" />}
-              {isModelLoading ? 'Loading Model...' : 'Enable Webcam'}
+          {hasCameraPermission === null && (
+            <Button onClick={enableWebcam} className="w-full">
+              <Camera className="mr-2" />
+              Enable Webcam
             </Button>
           )}
         </CardFooter>
@@ -266,14 +312,15 @@ export default function SignDetector() {
             </div>
           </CardContent>
           <CardFooter>
-            <Button onClick={predictGesture} disabled={!webcamEnabled || isPredicting} className="w-full bg-accent hover:bg-accent/90">
+            <Button onClick={predictGesture} disabled={!areModelsLoaded || isPredicting || !hasCameraPermission} className="w-full bg-accent hover:bg-accent/90">
               {isPredicting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
               {isPredicting ? 'Detecting...' : 'Detect Gesture'}
             </Button>
           </CardFooter>
         </Card>
       </div>
-      <canvas ref={canvasRef} style={{ display: 'none' }} width="224" height="224" />
     </div>
   );
 }
+
+    

@@ -2,33 +2,54 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import * as tf from '@tensorflow/tfjs';
-import * as mobilenet from '@tensorflow-models/mobilenet';
-import * as knnClassifier from '@tensorflow-models/knn-classifier';
+import type * as tf from '@tensorflow/tfjs';
+import type * as mobilenet from '@tensorflow-models/mobilenet';
+import type * as knnClassifier from '@tensorflow-models/knn-classifier';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, Camera, PlusCircle, Trash2, Save, BrainCircuit } from 'lucide-react';
-import { Separator } from './ui/separator';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 
 export default function SignTrainer() {
   const { toast } = useToast();
 
+  // TensorFlow and model refs
+  const tfRef = useRef<typeof tf | null>(null);
+  const mobilenetRef = useRef<typeof mobilenet | null>(null);
+  const knnClassifierRef = useRef<typeof knnClassifier | null>(null);
+  
   const classifier = useRef<knnClassifier.KNNClassifier | null>(null);
   const mobilenetModel = useRef<mobilenet.MobileNet | null>(null);
   const webcamRef = useRef<HTMLVideoElement>(null);
   
-  const [isModelLoading, setIsModelLoading] = useState(true);
-  const [webcamEnabled, setWebcamEnabled] = useState(false);
-  const [infoMessage, setInfoMessage] = useState("Loading AI model...");
+  const [isModelLoading, setIsModelLoading] = useState(false);
+  const [areModelsLoaded, setAreModelsLoaded] = useState(false);
+  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const [infoMessage, setInfoMessage] = useState("Enable webcam to start training.");
 
   const [newSignLabel, setNewSignLabel] = useState("");
   const [trainedSigns, setTrainedSigns] = useState<Array<{ label: string; samples: number }>>([]);
   const [isSaving, setIsSaving] = useState(false);
 
   const loadModels = useCallback(async () => {
+    if (areModelsLoaded) return;
+    setIsModelLoading(true);
+    setInfoMessage("Loading AI model...");
+
     try {
+      // Dynamically import the libraries
+      const [tf, mobilenet, knnClassifier] = await Promise.all([
+        import('@tensorflow/tfjs'),
+        import('@tensorflow-models/mobilenet'),
+        import('@tensorflow-models/knn-classifier')
+      ]);
+
+      tfRef.current = tf;
+      mobilenetRef.current = mobilenet;
+      knnClassifierRef.current = knnClassifier;
+
       await tf.setBackend('webgl');
       const mobilenetPromise = mobilenet.load();
       classifier.current = knnClassifier.create();
@@ -36,7 +57,7 @@ export default function SignTrainer() {
       const storedClassifier = localStorage.getItem('signLanguageClassifier');
       if (storedClassifier) {
         const tensors = JSON.parse(storedClassifier, (key, value) => {
-          if (value.tensor) {
+          if (value && value.tensor) {
             return tf.tensor(value.data, value.shape, value.dtype as any);
           }
           return value;
@@ -56,35 +77,34 @@ export default function SignTrainer() {
       }
       
       mobilenetModel.current = await mobilenetPromise;
-      setIsModelLoading(false);
-      setInfoMessage("Model loaded! Enable webcam to start training.");
+      setAreModelsLoaded(true);
+      setInfoMessage("Models loaded! Add a label and take samples.");
     } catch (error) {
       console.error("Model loading failed:", error);
       setInfoMessage("Error loading models. Please refresh.");
       toast({ title: "Model Loading Failed", variant: "destructive" });
+    } finally {
+      setIsModelLoading(false);
     }
-  }, [toast]);
+  }, [toast, areModelsLoaded]);
 
-  useEffect(() => {
-    loadModels();
-  }, [loadModels]);
-
-  const enableWebcam = async () => {
+  const enableWebcam = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       if (webcamRef.current) {
         webcamRef.current.srcObject = stream;
         webcamRef.current.addEventListener('loadeddata', () => {
-          setWebcamEnabled(true);
-          setInfoMessage("Webcam active. Add a label and take samples.");
+          setHasCameraPermission(true);
+          loadModels(); 
         });
       }
     } catch (error) {
       console.error("Webcam access denied:", error);
+      setHasCameraPermission(false);
       toast({ title: "Webcam Access Denied", variant: "destructive" });
       setInfoMessage("Webcam access is required to train.");
     }
-  };
+  }, [loadModels, toast]);
 
   const addSign = () => {
     if (!newSignLabel.trim()) {
@@ -100,13 +120,13 @@ export default function SignTrainer() {
   };
 
   const addSample = (label: string) => {
-    if (!mobilenetModel.current || !classifier.current || !webcamRef.current) return;
+    if (!mobilenetModel.current || !classifier.current || !webcamRef.current || !tfRef.current) return;
     
     const classId = trainedSigns.findIndex(sign => sign.label === label);
     if (classId === -1) return;
 
-    tf.tidy(() => {
-      const img = tf.browser.fromPixels(webcamRef.current!);
+    tfRef.current.tidy(() => {
+      const img = tfRef.current!.browser.fromPixels(webcamRef.current!);
       const activation = mobilenetModel.current!.infer(img, true);
       classifier.current!.addExample(activation, classId);
     });
@@ -138,13 +158,13 @@ export default function SignTrainer() {
   };
 
   const saveModel = async () => {
-    if (!classifier.current) return;
+    if (!classifier.current || !tfRef.current) return;
     setIsSaving(true);
     
     try {
         const dataset = classifier.current.getClassifierDataset();
         const jsonDataset = JSON.stringify(dataset, (key, value) => {
-          if (value instanceof tf.Tensor) {
+          if (value instanceof tfRef.current!.Tensor) {
             return { tensor: true, data: value.arraySync(), shape: value.shape, dtype: value.dtype };
           }
           return value;
@@ -183,19 +203,34 @@ export default function SignTrainer() {
               autoPlay
               playsInline
               muted
-              className={`w-full h-full object-cover transform -scale-x-100 ${webcamEnabled ? 'block' : 'hidden'}`}
+              className={`w-full h-full object-cover transform -scale-x-100 ${hasCameraPermission === true ? 'block' : 'hidden'}`}
             />
-            {!webcamEnabled && (
-              <div className="text-center text-muted-foreground">
-                {isModelLoading ? <Loader2 className="h-8 w-8 animate-spin mx-auto" /> : <p>Enable webcam to see live feed.</p>}
+            {hasCameraPermission === null && (
+               <div className="text-center text-muted-foreground p-4">
+                 <p>Enable your webcam to start training new gestures.</p>
+              </div>
+            )}
+            {hasCameraPermission === false && (
+                <Alert variant="destructive" className="m-4">
+                  <AlertTitle>Camera Access Required</AlertTitle>
+                  <AlertDescription>
+                    Please allow camera access to use this feature.
+                  </AlertDescription>
+                </Alert>
+            )}
+            {isModelLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80">
+                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+                <p className="mt-4 text-foreground">Loading AI models...</p>
               </div>
             )}
           </div>
         </CardContent>
         <CardFooter>
-          {!webcamEnabled && (
-            <Button onClick={enableWebcam} disabled={isModelLoading} className="w-full">
-              {isModelLoading ? 'Loading...' : 'Enable Webcam'}
+          {hasCameraPermission === null && (
+            <Button onClick={enableWebcam} className="w-full">
+              <Camera className="mr-2" />
+              Enable Webcam
             </Button>
           )}
         </CardFooter>
@@ -212,44 +247,43 @@ export default function SignTrainer() {
                     <Input 
                         value={newSignLabel}
                         onChange={(e) => setNewSignLabel(e.target.value)}
-                        placeholder="Enter word or sentence (e.g., 'Hello' or 'I am hungry')"
+                        placeholder="Enter word or sentence..."
                         onKeyDown={(e) => e.key === 'Enter' && addSign()}
+                        disabled={!areModelsLoaded}
                     />
-                    <Button onClick={addSign}>Add</Button>
+                    <Button onClick={addSign} disabled={!areModelsLoaded}>Add</Button>
                 </div>
                 <div className="max-h-64 overflow-y-auto pr-2 space-y-3">
                     {trainedSigns.length === 0 && <p className="text-muted-foreground text-center py-4">No signs added yet.</p>}
-                    {trainedSigns.map((sign, index) => (
-                        <React.Fragment key={sign.label}>
-                            <div className="flex items-center justify-between gap-2 p-2 rounded-md border">
-                                <div className="flex flex-col">
-                                    <span className="font-medium">{sign.label}</span>
-                                    <span className="text-sm text-muted-foreground">{sign.samples} samples</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => addSample(sign.label)}
-                                    disabled={!webcamEnabled}
-                                >
-                                    <PlusCircle className="mr-2 h-4 w-4" /> Sample
-                                </Button>
-                                <Button
-                                    variant="destructive"
-                                    size="icon"
-                                    onClick={() => deleteSign(sign.label)}
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                </Button>
-                                </div>
+                    {trainedSigns.map((sign) => (
+                        <div key={sign.label} className="flex items-center justify-between gap-2 p-2 rounded-md border">
+                            <div className="flex flex-col">
+                                <span className="font-medium">{sign.label}</span>
+                                <span className="text-sm text-muted-foreground">{sign.samples} samples</span>
                             </div>
-                        </React.Fragment>
+                            <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => addSample(sign.label)}
+                                disabled={!hasCameraPermission || isModelLoading}
+                            >
+                                <PlusCircle className="mr-2 h-4 w-4" /> Sample
+                            </Button>
+                            <Button
+                                variant="destructive"
+                                size="icon"
+                                onClick={() => deleteSign(sign.label)}
+                            >
+                                <Trash2 className="h-4 w-4" />
+                            </Button>
+                            </div>
+                        </div>
                     ))}
                 </div>
             </CardContent>
              <CardFooter>
-                <Button onClick={saveModel} disabled={isSaving || trainedSigns.length === 0} className="w-full">
+                <Button onClick={saveModel} disabled={isSaving || trainedSigns.length === 0 || !areModelsLoaded} className="w-full">
                     {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                     Save Model to Browser
                 </Button>
@@ -259,3 +293,5 @@ export default function SignTrainer() {
     </div>
   );
 }
+
+    
