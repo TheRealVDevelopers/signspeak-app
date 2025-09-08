@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { Hand, PlusCircle, ArrowRight } from 'lucide-react';
+import { Hand, ArrowRight } from 'lucide-react';
 
 export default function Home() {
   return (
@@ -24,29 +24,10 @@ export default function Home() {
           </p>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
-          <Card className="shadow-lg">
+        <div className="flex justify-center mb-12">
+          <Card className="shadow-lg max-w-sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <PlusCircle className="text-primary" />
-                <span>Train Your Own Signs</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-muted-foreground mb-4">
-                Teach the AI your custom gestures. Associate any sign with a
-                word or sentence you choose. No rules, just your expression.
-              </p>
-              <Link href="/train" passHref>
-                <Button className="w-full">
-                  Start Training <ArrowRight className="ml-2" />
-                </Button>
-              </Link>
-            </CardContent>
-          </Card>
-          <Card className="shadow-lg">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="flex items-center justify-center gap-2">
                 <Hand className="text-accent" />
                 <span>Detect & Communicate</span>
               </CardTitle>
