@@ -2,9 +2,6 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type * as tf from '@tensorflow/tfjs';
-import type * as mobilenet from '@tensorflow-models/mobilenet';
-import type * as knnClassifier from '@tensorflow-models/knn-classifier';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -12,6 +9,11 @@ import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, Camera, Sparkles, Hand } from 'lucide-react';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+
+// Dynamically import TensorFlow and related models to reduce initial bundle size.
+type Tf = typeof import('@tensorflow/tfjs');
+type MobileNet = typeof import('@tensorflow-models/mobilenet');
+type KnnClassifier = typeof import('@tensorflow-models/knn-classifier');
 
 
 const CONFIDENCE_THRESHOLD = 0.8;
@@ -36,12 +38,12 @@ export default function SignDetector() {
   const { toast } = useToast();
 
   // TensorFlow and model refs
-  const tfRef = useRef<typeof tf | null>(null);
-  const mobilenetRef = useRef<typeof mobilenet | null>(null);
-  const knnClassifierRef = useRef<typeof knnClassifier | null>(null);
+  const tfRef = useRef<Tf | null>(null);
+  const mobilenetRef = useRef<MobileNet | null>(null);
+  const knnClassifierRef = useRef<KnnClassifier | null>(null);
 
-  const classifier = useRef<knnClassifier.KNNClassifier | null>(null);
-  const mobilenetModel = useRef<mobilenet.MobileNet | null>(null);
+  const classifier = useRef<import('@tensorflow-models/knn-classifier').KNNClassifier | null>(null);
+  const mobilenetModel = useRef<import('@tensorflow-models/mobilenet').MobileNet | null>(null);
   const webcamRef = useRef<HTMLVideoElement>(null);
   
   const [isModelLoading, setIsModelLoading] = useState(false);
@@ -82,10 +84,10 @@ export default function SignDetector() {
       classifier.current = knnClassifier.create();
 
       const storedClassifier = localStorage.getItem('signLanguageClassifier');
-      if (storedClassifier) {
+      if (storedClassifier && tfRef.current) {
         const tensors = JSON.parse(storedClassifier, (key, value) => {
           if (value && value.tensor) {
-            return tf.tensor(value.data, value.shape, value.dtype as any);
+            return tfRef.current!.tensor(value.data, value.shape, value.dtype as any);
           }
           return value;
         });
@@ -322,5 +324,3 @@ export default function SignDetector() {
     </div>
   );
 }
-
-    
