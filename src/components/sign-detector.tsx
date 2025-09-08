@@ -1,324 +1,231 @@
-
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Camera, Sparkles, Hand } from 'lucide-react';
+import { Loader2, Camera, Video, VideoOff, Sparkles, History, X } from 'lucide-react';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 
-// Dynamically import TensorFlow and related models to reduce initial bundle size.
-type Tf = typeof import('@tensorflow/tfjs');
-type MobileNet = typeof import('@tensorflow-models/mobilenet');
-type KnnClassifier = typeof import('@tensorflow-models/knn-classifier');
+// This imports the function that calls the Genkit AI flow.
+import { detectSign } from '@/ai/flows/sign-detection';
 
-
-const CONFIDENCE_THRESHOLD = 0.8;
-const MAX_WORD_HISTORY = 5;
-
-// Default sentences for matching
-const defaultTargetSentences = [
-    "what is your name",
-    "how are you",
-    "i need water",
-    "good morning",
-    "where is the toilet",
-    "i am fine",
-    "thank you",
-    "please help me",
-    "nice to meet you",
-    "i love you"
-].map(s => s.toLowerCase());
-
+const CONFIDENCE_THRESHOLD = 0.5; // Lower threshold for general model
 
 export default function SignDetector() {
   const { toast } = useToast();
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  // TensorFlow and model refs
-  const tfRef = useRef<Tf | null>(null);
-  const mobilenetRef = useRef<MobileNet | null>(null);
-  const knnClassifierRef = useRef<KnnClassifier | null>(null);
-
-  const classifier = useRef<import('@tensorflow-models/knn-classifier').KNNClassifier | null>(null);
-  const mobilenetModel = useRef<import('@tensorflow-models/mobilenet').MobileNet | null>(null);
-  const webcamRef = useRef<HTMLVideoElement>(null);
-  
-  const [isModelLoading, setIsModelLoading] = useState(false);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
-  const [isPredicting, setIsPredicting] = useState(false);
-  
-  const [prediction, setPrediction] = useState<{ label: string, confidence: number } | null>(null);
-  const [infoMessage, setInfoMessage] = useState("Enable your webcam to begin.");
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectionResult, setDetectionResult] = useState<{ word: string, confidence: number } | null>(null);
+  const [detectionHistory, setDetectionHistory] = useState<string[]>([]);
+  const [isCameraOn, setIsCameraOn] = useState(false);
 
-  const [wordHistory, setWordHistory] = useState<string[]>([]);
-  const [detectedSentence, setDetectedSentence] = useState<string | null>(null);
-
-  const [classLabels, setClassLabels] = useState<string[]>([]);
-  const [targetSentences, setTargetSentences] = useState<string[]>(defaultTargetSentences);
-  
-  const [areModelsLoaded, setAreModelsLoaded] = useState(false);
-
-
-  const loadModels = useCallback(async () => {
-    if (areModelsLoaded) return;
-    setIsModelLoading(true);
-    setInfoMessage("Loading AI models and custom data...");
-    
-    try {
-      // Dynamically import the libraries
-      const [tf, mobilenet, knnClassifier] = await Promise.all([
-        import('@tensorflow/tfjs'),
-        import('@tensorflow-models/mobilenet'),
-        import('@tensorflow-models/knn-classifier')
-      ]);
-
-      tfRef.current = tf;
-      mobilenetRef.current = mobilenet;
-      knnClassifierRef.current = knnClassifier;
-
-      await tf.setBackend('webgl');
-      const mobilenetPromise = mobilenet.load();
-      classifier.current = knnClassifier.create();
-
-      const storedClassifier = localStorage.getItem('signLanguageClassifier');
-      if (storedClassifier && tfRef.current) {
-        const tensors = JSON.parse(storedClassifier, (key, value) => {
-          if (value && value.tensor) {
-            return tfRef.current!.tensor(value.data, value.shape, value.dtype as any);
-          }
-          return value;
-        });
-        classifier.current.setClassifierDataset(tensors);
-        toast({ title: "Loaded saved model from browser." });
-      }
-
-      const storedLabels = localStorage.getItem('signLanguageLabels');
-      if (storedLabels) {
-        const labels = JSON.parse(storedLabels);
-        setClassLabels(labels);
-        
-        const customSentences = labels.filter((l: string) => l.includes(' '));
-        setTargetSentences(prev => [...new Set([...prev, ...customSentences.map((s:string) => s.toLowerCase())])]);
-      } else {
-        setClassLabels([]);
-      }
-
-      mobilenetModel.current = await mobilenetPromise;
-      setAreModelsLoaded(true);
-      setInfoMessage("Models loaded! Click 'Detect Gesture' to start.");
-    } catch (error) {
-      console.error("Model loading failed:", error);
-      setInfoMessage("Error: Could not load models. Please refresh the page.");
-      toast({
-        title: "Model Loading Failed",
-        description: "There was an issue loading the machine learning models.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsModelLoading(false);
-    }
-  }, [toast, areModelsLoaded]);
-
-  const enableWebcam = useCallback(async () => {
+  const getCameraPermission = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (webcamRef.current) {
-        webcamRef.current.srcObject = stream;
-        webcamRef.current.addEventListener('loadeddata', () => {
-          setHasCameraPermission(true);
-          loadModels();
-        });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
       }
+      setHasCameraPermission(true);
+      setIsCameraOn(true);
     } catch (error) {
-      console.error("Webcam access denied:", error);
+      console.error('Error accessing camera:', error);
       setHasCameraPermission(false);
-      setInfoMessage("Webcam access is required. Please allow access and try again.");
+      setIsCameraOn(false);
       toast({
-        title: "Webcam Access Denied",
-        description: "Please enable camera access in your browser settings.",
-        variant: "destructive"
+        variant: 'destructive',
+        title: 'Camera Access Denied',
+        description: 'Please enable camera permissions in your browser settings to use this app.',
       });
     }
-  }, [loadModels, toast]);
-  
+  }, [toast]);
 
-  const checkForSentenceMatch = (history: string[]) => {
-      const recentWords = history.join(' ').toLowerCase();
-      const match = targetSentences.find(sentence => recentWords.includes(sentence));
-      if (match) {
-          setDetectedSentence(match.charAt(0).toUpperCase() + match.slice(1));
-      } else {
-          setDetectedSentence(null);
+  useEffect(() => {
+    getCameraPermission();
+    
+    // Cleanup function to stop media tracks when component unmounts
+    return () => {
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
       }
+    }
+  }, [getCameraPermission]);
+
+  const toggleCamera = () => {
+    if (isCameraOn) {
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+        setIsCameraOn(false);
+      }
+    } else {
+      getCameraPermission();
+    }
   };
 
-  const predictGesture = async () => {
-    if (!mobilenetModel.current || !classifier.current || !webcamRef.current || !tfRef.current) {
-        toast({
-          title: "Models not ready",
-          description: "The AI models are still loading. Please wait a moment.",
-          variant: "destructive"
-        });
-        return;
+  const handleDetect = async () => {
+    if (!videoRef.current || !videoRef.current.srcObject) {
+      toast({ title: "Camera is not active.", variant: "destructive" });
+      return;
     }
+    setIsDetecting(true);
+    setDetectionResult(null);
 
-    if(classifier.current.getNumClasses() === 0){
-        toast({
-            title: "Cannot Predict",
-            description: "Please train at least one custom sign on the 'Train' page before detecting.",
-            variant: "destructive"
-        });
-        setIsPredicting(false);
-        return;
-    }
-
-
-    setIsPredicting(true);
-    setPrediction(null);
-
-    const activation = tfRef.current.tidy(() => {
-        const img = tfRef.current!.browser.fromPixels(webcamRef.current!);
-        return mobilenetModel.current!.infer(img, true);
-    });
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    // Flip the image horizontally
+    ctx.scale(-1, 1);
+    ctx.drawImage(videoRef.current, -canvas.width, 0, canvas.width, canvas.height);
+    
+    const imageDataUri = canvas.toDataURL('image/jpeg');
 
     try {
-        const result = await classifier.current!.predictClass(activation, 5);
-        const confidence = result.confidences[result.label];
-        
-        if (classLabels.length > 0) {
-          const label = classLabels[parseInt(result.label, 10)];
-          if (confidence > CONFIDENCE_THRESHOLD) {
-              setPrediction({ label, confidence });
-              const newHistory = [...wordHistory, label.toLowerCase()].slice(-MAX_WORD_HISTORY);
-              setWordHistory(newHistory);
-              checkForSentenceMatch(newHistory);
-          } else {
-              setPrediction({ label: "Unrecognized", confidence: 1 - confidence });
-          }
-        } else {
-           toast({ title: "Prediction Error", description: "Class labels not loaded correctly.", variant: "destructive" });
-        }
+      const result = await detectSign({ imageDataUri });
 
-    } catch(e) {
-        console.error("Prediction failed", e);
-        toast({ title: "Prediction Failed", description: "An error occurred during prediction.", variant: "destructive" });
+      if (result && result.detectedWord) {
+        const { detectedWord, confidence } = result;
+
+        if (confidence > CONFIDENCE_THRESHOLD && detectedWord.toLowerCase() !== 'unrecognized') {
+          setDetectionResult({ word: detectedWord, confidence });
+          setDetectionHistory(prev => [detectedWord, ...prev].slice(0, 10)); // Keep last 10
+        } else {
+          setDetectionResult({ word: "Unrecognized Gesture", confidence: 1 - confidence });
+        }
+      } else {
+         throw new Error("Invalid response from AI.");
+      }
+    } catch (error) {
+      console.error("Error during prediction:", error);
+      toast({
+        title: "Prediction Failed",
+        description: "An error occurred during the detection process.",
+        variant: "destructive"
+      });
+      setDetectionResult({ word: "Error", confidence: 0 });
     } finally {
-        activation.dispose();
-        setIsPredicting(false);
+      setIsDetecting(false);
     }
   };
-  
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full">
-      <Card className="shadow-lg">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Camera and Controls Section */}
+      <Card className="lg:col-span-2 shadow-lg border-2 border-primary/20 bg-card/80 backdrop-blur-sm">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Camera className="text-primary" />
-            <span>Live Feed</span>
+          <CardTitle className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Camera className="text-primary" />
+              <span>Live Camera Feed</span>
+            </div>
+             <Button size="icon" variant="ghost" onClick={toggleCamera}>
+              {isCameraOn ? <VideoOff /> : <Video />}
+            </Button>
           </CardTitle>
-          <CardDescription>{infoMessage}</CardDescription>
+          <CardDescription>
+            Position your hand gesture in the frame and click detect.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="aspect-video bg-secondary rounded-md overflow-hidden relative flex items-center justify-center">
-             <video
-              ref={webcamRef}
+          <div className="aspect-video bg-secondary rounded-lg overflow-hidden relative flex items-center justify-center border">
+            <video
+              ref={videoRef}
+              className={`w-full h-full object-cover transform -scale-x-100 ${isCameraOn ? 'block' : 'hidden'}`}
               autoPlay
-              playsInline
               muted
-              className={`w-full h-full object-cover transform -scale-x-100 ${hasCameraPermission === true ? 'block' : 'hidden'}`}
+              playsInline
             />
-            {hasCameraPermission === null && !isModelLoading && (
-              <div className="text-center text-muted-foreground p-4">
-                 <p>Enable your webcam to start gesture detection.</p>
+            {!isCameraOn && hasCameraPermission !== false && (
+              <div className="text-center text-muted-foreground p-4 flex flex-col items-center">
+                 <VideoOff className="w-16 h-16 mb-4 text-muted-foreground/50"/>
+                 <h3 className="font-bold text-lg">Camera is Off</h3>
+                 <p>Press the camera icon to turn it on.</p>
               </div>
             )}
             {hasCameraPermission === false && (
                 <Alert variant="destructive" className="m-4">
                   <AlertTitle>Camera Access Required</AlertTitle>
                   <AlertDescription>
-                    Please allow camera access to use this feature. You may need to change permissions in your browser settings.
+                    Please allow camera access to use this feature. You may need to refresh the page and grant permission.
                   </AlertDescription>
                 </Alert>
-            )}
-             {isModelLoading && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80">
-                <Loader2 className="h-12 w-12 animate-spin text-primary" />
-                <p className="mt-4 text-foreground">Loading AI models...</p>
-              </div>
             )}
           </div>
         </CardContent>
         <CardFooter>
-          {hasCameraPermission === null && (
-            <Button onClick={enableWebcam} className="w-full">
-              <Camera className="mr-2" />
-              Enable Webcam
-            </Button>
-          )}
+          <Button onClick={handleDetect} disabled={!isCameraOn || isDetecting} className="w-full text-lg py-6 bg-accent hover:bg-accent/90">
+            {isDetecting ? <Loader2 className="mr-2 h-6 w-6 animate-spin" /> : <Sparkles className="mr-2 h-6 w-6" />}
+            {isDetecting ? 'Detecting...' : 'Detect Gesture Now'}
+          </Button>
         </CardFooter>
       </Card>
 
-      <div className="flex flex-col gap-8">
-        <Card className="shadow-lg">
+      {/* Results Section */}
+      <div className="flex flex-col gap-6">
+        <Card className="shadow-lg flex-grow bg-card/80 backdrop-blur-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Hand className="text-primary" />
-              <span>Word & Sentence Detection</span>
+              <Sparkles className="text-primary" />
+              <span>Detection Result</span>
             </CardTitle>
-            <CardDescription>
-              The AI's prediction will appear below.
-            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div>
-              <h3 className="font-medium mb-2 text-center">Detected Word</h3>
-              {prediction ? (
-                <div className="space-y-4">
-                  <p className="text-2xl font-bold text-center">
-                    <span className="text-accent">{prediction.label}</span>
-                  </p>
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <span className="text-sm font-medium text-muted-foreground">Confidence</span>
-                      <span className="text-sm font-medium text-primary">{(prediction.confidence * 100).toFixed(1)}%</span>
-                    </div>
-                    <Progress value={prediction.confidence * 100} className="w-full" />
+          <CardContent className="flex flex-col items-center justify-center h-full text-center space-y-4">
+            {detectionResult ? (
+              <>
+                <p className="text-4xl font-bold text-accent">
+                  {detectionResult.word}
+                </p>
+                <div className="w-full px-4">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-sm font-medium text-muted-foreground">Confidence</span>
+                    <span className="text-sm font-medium text-primary">{(detectionResult.confidence * 100).toFixed(0)}%</span>
                   </div>
+                  <Progress value={detectionResult.confidence * 100} />
                 </div>
-              ) : (
-                <div className="text-center text-muted-foreground h-24 flex items-center justify-center">
-                  <p>Word prediction will be shown here.</p>
-                </div>
-              )}
-            </div>
-            
-            <Separator />
-            
-            <div>
-              <h3 className="font-medium mb-2 text-center">Detected Sentence</h3>
-              <CardDescription className="text-center mb-2">
-                  History: {wordHistory.join(', ') || 'None'}
-              </CardDescription>
-              {detectedSentence ? (
-                  <p className="text-2xl font-bold text-center text-accent">
-                      {detectedSentence}
-                  </p>
-              ) : (
-                  <div className="text-center text-muted-foreground h-12 flex items-center justify-center">
-                      <p>Matching sentence will appear here.</p>
-                  </div>
-              )}
-            </div>
+              </>
+            ) : (
+              <div className="text-muted-foreground py-8">
+                <p>Click "Detect" to see the result.</p>
+              </div>
+            )}
           </CardContent>
-          <CardFooter>
-            <Button onClick={predictGesture} disabled={!areModelsLoaded || isPredicting || !hasCameraPermission} className="w-full bg-accent hover:bg-accent/90">
-              {isPredicting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              {isPredicting ? 'Detecting...' : 'Detect Gesture'}
-            </Button>
-          </CardFooter>
+        </Card>
+
+        <Card className="shadow-lg bg-card/80 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+               <div className="flex items-center gap-2">
+                <History className="text-primary" />
+                <span>History</span>
+              </div>
+              <Button size="icon" variant="ghost" onClick={() => setDetectionHistory([])} disabled={detectionHistory.length === 0}>
+                <X className="h-4 w-4" />
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {detectionHistory.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {detectionHistory.map((word, index) => (
+                  <Badge key={index} variant="secondary" className="text-md">
+                    {word}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-center text-sm">No detections yet.</p>
+            )}
+          </CardContent>
         </Card>
       </div>
     </div>

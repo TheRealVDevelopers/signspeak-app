@@ -1,11 +1,7 @@
-// sign-detection.ts
 'use server';
 /**
- * @fileOverview Detects sign language gestures from a webcam feed and displays the corresponding word.
- *
- * - detectSign - A function that handles the sign detection process.
- * - DetectSignInput - The input type for the detectSign function.
- * - DetectSignOutput - The return type for the detectSign function.
+ * @fileOverview Detects a sign language gesture from an image.
+ * This flow now uses a general vision model to identify one of a few common signs.
  */
 
 import {ai} from '@/ai/genkit';
@@ -23,8 +19,8 @@ export type DetectSignInput = z.infer<typeof DetectSignInputSchema>;
 const DetectSignOutputSchema = z.object({
   detectedWord: z
     .string()
-    .describe('The detected word from the sign language gesture.'),
-  confidence: z.number().describe('The confidence level of the prediction.'),
+    .describe('The detected word. Should be one of "Hello", "Yes", "No", "Thank You", "Please", or "Unrecognized".'),
+  confidence: z.number().describe('The confidence level (0-1) of the prediction.'),
 });
 export type DetectSignOutput = z.infer<typeof DetectSignOutputSchema>;
 
@@ -36,7 +32,13 @@ const prompt = ai.definePrompt({
   name: 'detectSignPrompt',
   input: {schema: DetectSignInputSchema},
   output: {schema: DetectSignOutputSchema},
-  prompt: `You are a sign language expert. Analyze the image of the hand gesture and determine which word is being signed from the list: Hello, Yes, No, Thank You, Please. Return the detected word and the confidence level of your prediction.
+  prompt: `Analyze the image of a hand gesture. Your task is to identify which of the following common signs is being made: "Hello", "Yes", "No", "Thank You", "Please".
+
+If the gesture clearly matches one of these signs, return that sign name.
+
+If the gesture does not match any of the signs, or if it is unclear, you MUST return the word "Unrecognized".
+
+Provide a confidence score from 0.0 to 1.0. If the sign is unrecognized, the confidence should reflect the confidence that it is indeed none of the listed signs.
 
 Image: {{media url=imageDataUri}}`,
 });
@@ -49,6 +51,13 @@ const detectSignFlow = ai.defineFlow(
   },
   async input => {
     const {output} = await prompt(input);
-    return output!;
+    if (!output) {
+      // If the model fails to produce any structured output, return a default "Unrecognized" response.
+      return {
+        detectedWord: 'Unrecognized',
+        confidence: 0,
+      };
+    }
+    return output;
   }
 );
