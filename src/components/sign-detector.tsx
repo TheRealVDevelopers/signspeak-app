@@ -8,10 +8,10 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, Camera, Video, VideoOff, Sparkles, History, X, Award, Flame } from 'lucide-react';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { detectSign } from '@/ai/flows/sign-detection';
 import { cn } from '@/lib/utils';
+import { useModel } from '@/hooks/use-model';
 
-const CONFIDENCE_THRESHOLD = 0.5;
+const CONFIDENCE_THRESHOLD = 0.8;
 
 export default function SignDetector() {
   const { toast } = useToast();
@@ -25,6 +25,8 @@ export default function SignDetector() {
   
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
+
+  const { model, loadModel, isModelLoading } = useModel();
 
   const getCameraPermission = useCallback(async () => {
     try {
@@ -48,13 +50,14 @@ export default function SignDetector() {
 
   useEffect(() => {
     getCameraPermission();
+    loadModel();
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
         const stream = videoRef.current.srcObject as MediaStream;
         stream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [getCameraPermission]);
+  }, [getCameraPermission, loadModel]);
 
   const toggleCamera = () => {
     if (isCameraOn) {
@@ -70,8 +73,8 @@ export default function SignDetector() {
   };
 
   const handleDetect = async () => {
-    if (!videoRef.current || !videoRef.current.srcObject) {
-      toast({ title: "Camera is not active.", variant: "destructive" });
+    if (!videoRef.current || !videoRef.current.srcObject || !model) {
+      toast({ title: "Camera or model not ready.", variant: "destructive" });
       return;
     }
     setIsDetecting(true);
@@ -86,17 +89,15 @@ export default function SignDetector() {
     ctx.scale(-1, 1);
     ctx.drawImage(videoRef.current, -canvas.width, 0, canvas.width, canvas.height);
     
-    const imageDataUri = canvas.toDataURL('image/jpeg');
-
     try {
-      const result = await detectSign({ imageDataUri });
+      const result = await model.predict(canvas);
 
-      if (result && result.detectedWord) {
-        const { detectedWord, confidence } = result;
+      if (result && result.label) {
+        const { label, confidence } = result;
 
-        if (confidence > CONFIDENCE_THRESHOLD && detectedWord.toLowerCase() !== 'unrecognized') {
-          setDetectionResult({ word: detectedWord, confidence });
-          setDetectionHistory(prev => [detectedWord, ...prev].slice(0, 10));
+        if (confidence > CONFIDENCE_THRESHOLD && label.toLowerCase() !== 'unrecognized') {
+          setDetectionResult({ word: label, confidence });
+          setDetectionHistory(prev => [label, ...prev].slice(0, 10));
           setCombo(prev => prev + 1);
           setScore(prev => prev + 100 * (combo + 1));
         } else {
@@ -104,13 +105,14 @@ export default function SignDetector() {
           setCombo(0); // Reset combo
         }
       } else {
-         throw new Error("Invalid response from AI.");
+         setDetectionResult({ word: "Unrecognized", confidence: 1 });
+         setCombo(0);
       }
     } catch (error) {
       console.error("Error during prediction:", error);
       toast({
         title: "Prediction Failed",
-        description: "An error occurred. Please try again.",
+        description: "An error occurred. Make sure you have trained some gestures.",
         variant: "destructive"
       });
       setDetectionResult({ word: "Error", confidence: 0 });
@@ -119,6 +121,8 @@ export default function SignDetector() {
       setIsDetecting(false);
     }
   };
+
+  const isLoading = isModelLoading || (isCameraOn && !videoRef.current?.srcObject);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -142,7 +146,15 @@ export default function SignDetector() {
               className={`w-full h-full object-cover transform -scale-x-100 ${isCameraOn ? 'block' : 'hidden'}`}
               autoPlay muted playsInline
             />
-            {!isCameraOn && hasCameraPermission !== false && (
+            {isLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 text-white">
+                <Loader2 className="w-16 h-16 animate-spin mb-4"/>
+                <p className="text-lg font-semibold">
+                  {isModelLoading ? "Loading AI Model..." : "Starting Camera..."}
+                </p>
+              </div>
+            )}
+            {!isCameraOn && hasCameraPermission !== false && !isLoading && (
               <div className="text-center text-muted-foreground p-4 flex flex-col items-center">
                  <VideoOff className="w-16 h-16 mb-4 text-muted-foreground/50"/>
                  <h3 className="font-bold text-lg">Camera is Off</h3>
@@ -161,7 +173,7 @@ export default function SignDetector() {
           </div>
         </CardContent>
         <CardFooter>
-          <Button onClick={handleDetect} disabled={!isCameraOn || isDetecting} size="lg" className="w-full text-xl py-8 bg-gradient-to-r from-primary to-secondary text-white shadow-lg hover:shadow-primary/50 transition-all duration-300 transform hover:scale-105">
+          <Button onClick={handleDetect} disabled={!isCameraOn || isDetecting || isLoading} size="lg" className="w-full text-xl py-8 bg-gradient-to-r from-primary to-secondary text-white shadow-lg hover:shadow-primary/50 transition-all duration-300 transform hover:scale-105">
             {isDetecting ? <Loader2 className="mr-2 h-6 w-6 animate-spin" /> : <Sparkles className="mr-2 h-6 w-6" />}
             {isDetecting ? 'Detecting...' : 'Detect Gesture'}
           </Button>
@@ -206,7 +218,7 @@ export default function SignDetector() {
                 </div>
               ) : (
                 <div className="text-muted-foreground py-8">
-                  <p>Click "Detect" to see the magic.</p>
+                  <p>{isLoading ? "Initializing..." : 'Click "Detect" to see the magic.'}</p>
                 </div>
               )}
             </div>

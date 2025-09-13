@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Waves, Camera, Zap, BookOpen, ChevronRight } from 'lucide-react';
+import { Waves, Camera, Zap, BookOpen, ChevronRight, BrainCircuit } from 'lucide-react';
 
 const FeatureCard = ({ icon, title, description, href }: { icon: React.ElementType, title: string, description: string, href: string }) => {
   const Icon = icon;
@@ -53,6 +53,26 @@ export default function LandingPage() {
             </Link>
           </div>
         </section>
+
+        {/* Features Section */}
+        <section className="mb-24">
+          <h2 className="text-4xl font-bold text-center mb-12">Features</h2>
+          <div className="grid md:grid-cols-2 gap-8">
+            <FeatureCard
+              href="/detect"
+              icon={Zap}
+              title="Real-time Detection"
+              description="Instantly translate sign language gestures into text using your webcam."
+            />
+            <FeatureCard
+              href="/train"
+              icon={BrainCircuit}
+              title="Train Your Own Signs"
+              description="Teach the AI new gestures and build your own personalized sign language model."
+            />
+          </div>
+        </section>
+
 
         {/* How It Works Section */}
         <section className="mb-24">
